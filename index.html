@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AME - Apoio Missional</title>
+    
+    <!-- Estilos Críticos Anti-Flicker -->
+    <style>
+        :root { --primary: #EF4444; --bg: #000000; }
+        html, body { 
+            background-color: var(--bg) !important; 
+            margin: 0; 
+            padding: 0; 
+            color: #fff;
+            -webkit-font-smoothing: antialiased;
+        }
+        #root { background-color: var(--bg); min-height: 100vh; }
+        /* Esconde o root enquanto o Tailwind/React não assumem para evitar salto de layout */
+        #root:empty { display: none; }
+    </style>
+
+    <meta name="theme-color" content="#ef4444" />
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#EF4444',
+                        'primary-dark': '#DC2626',
+                        background: '#000000',
+                        surface: '#121212',
+                        muted: '#737373',
+                        border: '#262626',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #000000; }
+        ::-webkit-scrollbar-thumb { background: #262626; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #333333; }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.95.3",
+    "react": "https://esm.sh/react@^19.2.4",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react-dom": "https://esm.sh/react-dom@^19.2.4",
+    "react-dom/client": "https://esm.sh/react-dom@^19.2.4/client",
+    "react/jsx-runtime": "https://esm.sh/react@^19.2.4/jsx-runtime",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/"
+  }
+}
+</script>
+
+</head>
+<body>
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
