@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Person } from '../types';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const People: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const [people, setPeople] = useState<Person[]>([]);
@@ -12,6 +13,15 @@ export const People: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [formData, setFormData] = useState({ name: '', phone: '', notes: '' });
   const [idToDelete, setIdToDelete] = useState<string | null>(null);
+
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [savingPeople, setSavingPeople] = useState<Set<string>>(new Set());
+  const [queuedPeople, setQueuedPeople] = useState<Set<string>>(new Set());
+  const latestPeople = useRef<Record<string, Person>>({});
+
+  useEffect(() => {
+    latestPeople.current = people.reduce((acc, p) => { if (p.id) acc[p.id] = p; return acc; }, {} as Record<string, Person>);
+  }, [people]);
 
   const fetchPeople = useCallback(async (searchTerm = '') => {
     setLoading(true);
@@ -30,8 +40,18 @@ export const People: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
       
       if (error) throw error;
       setPeople(data || []);
+      if (!searchTerm) {
+        localStorage.setItem('people_cache', JSON.stringify(data || []));
+      }
     } catch (err: any) {
-      showToast('Erro ao carregar lista', 'error');
+      console.error('[People] fetch', err);
+      try {
+        const cached = localStorage.getItem('people_cache');
+        if (cached) {
+          setPeople(JSON.parse(cached));
+          showToast('Usando cache local (offline)', 'info');
+        }
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -44,16 +64,40 @@ export const People: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
     return () => clearTimeout(timer);
   }, [search, fetchPeople]);
 
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); showToast('Online — sincronizando...', 'info'); };
+    const onOffline = () => { setIsOnline(false); showToast('Sem conexão', 'warning'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, [showToast]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const persist = async (args: any, idForQueue?: string) => {
+      setSavingPeople(prev => new Set(prev).add(idForQueue || ''));
+      try {
+        const res = await safeWrite(args);
+        if (res.queued && idForQueue) {
+          setQueuedPeople(prev => new Set(prev).add(idForQueue));
+          showToast('Operação enfileirada (offline)', 'info');
+        }
+      } catch (e) {
+        console.error('[People] persist', e);
+        showToast('Erro ao salvar', 'error');
+      } finally {
+        setSavingPeople(prev => { const n = new Set(prev); n.delete(idForQueue || ''); return n; });
+      }
+    };
+
     try {
-      if (editingPerson) {
-        const { error } = await supabase.from('people').update(formData).eq('id', editingPerson.id);
-        if (error) throw error;
+      if (editingPerson && editingPerson.id) {
+        const filters = [{ op: 'eq', column: 'id', value: editingPerson.id }];
+        await persist({ op: 'update', table: 'people', payload: formData, filters, dedupeKey: dedupeKeyFor('people', [editingPerson.id]) }, editingPerson.id);
         showToast('Pessoa atualizada!');
       } else {
-        const { error } = await supabase.from('people').insert([formData]);
-        if (error) throw error;
+        const tempId = `tmp-${Date.now()}`;
+        await persist({ op: 'insert', table: 'people', payload: [formData], dedupeKey: dedupeKeyFor('people', [tempId]) }, tempId);
         showToast('Pessoa cadastrada!');
       }
       setIsModalOpen(false);
@@ -66,11 +110,11 @@ export const People: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const confirmDelete = async () => {
     if (!idToDelete) return;
     try {
-      const { error } = await supabase.from('people').delete().eq('id', idToDelete);
-      if (error) throw error;
+      await safeWrite({ op: 'delete', table: 'people', filters: [{ op: 'eq', column: 'id', value: idToDelete }], dedupeKey: dedupeKeyFor('people', [idToDelete]) });
       showToast('Pessoa excluída');
       fetchPeople(search);
     } catch (err: any) {
+      console.error('[People] delete', err);
       showToast(err.message, 'error');
     } finally {
       setIdToDelete(null);

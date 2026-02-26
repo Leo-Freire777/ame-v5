@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { clearOfflinePin, hasOfflinePin } from '../src/offline/offlinePin';
 import { MissionEvent } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const { profile, loadingProfile } = useAuth();
@@ -19,6 +20,13 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
   const [idToDelete, setIdToDelete] = useState<string | null>(null);
   const [newEvent, setNewEvent] = useState({ date: '', title: 'Missão' });
   const [hasPinOffline, setHasPinOffline] = useState(false);
+
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [queuedSettings, setQueuedSettings] = useState<Set<string>>(new Set());
+  const [queuedEvents, setQueuedEvents] = useState<Set<string>>(new Set());
+  const latestEvents = useRef<Record<string, MissionEvent>>({});
+
+  useEffect(() => { latestEvents.current = events.reduce((a,e)=>{ if(e.id) a[e.id]=e; return a; }, {} as Record<string,MissionEvent>); }, [events]);
 
   useEffect(() => {
     const handleBeforeInstall = (e: any) => {
@@ -70,7 +78,16 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
       if (cRes.data) setCutoff(cRes.data.value.cutoff);
       if (vRes.data) setVerse(vRes.data.value);
       setEvents(eRes.data || []);
+      localStorage.setItem('settings_events_cache', JSON.stringify(eRes.data || []));
     } catch (err: any) {
+      console.error('[Settings] loadAll', err);
+      try {
+        const cached = localStorage.getItem('settings_events_cache');
+        if (cached) {
+          setEvents(JSON.parse(cached));
+          showToast('Usando cache local (offline)', 'info');
+        }
+      } catch {}
       showToast('Erro ao carregar configurações', 'error');
     } finally {
       setLoading(false);
@@ -79,14 +96,26 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
 
   useEffect(() => { loadAll(); }, []);
 
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); showToast('Online — sincronizando...', 'info'); };
+    const onOffline = () => { setIsOnline(false); showToast('Sem conexão', 'warning'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, [showToast]);
+
   const saveSettings = async (key: string, value: any) => {
     if (!isAdmin) return showToast('Sem permissão', 'error');
     setSaving(true);
     try {
-      const { error } = await supabase.from('app_settings').upsert({ key, value, updated_at: new Date().toISOString() });
-      if (error) throw error;
+      const dedupe = dedupeKeyFor('app_settings',[key]);
+      const res = await safeWrite({ op:'upsert', table:'app_settings', payload:{ key, value, updated_at: new Date().toISOString() }, options:{ onConflict:'key' }, dedupeKey: dedupe });
+      if (res.queued) {
+        setQueuedSettings(prev=>new Set(prev).add(key));
+        showToast('Configuração enfileirada (offline)', 'info');
+      }
       showToast('Configuração salva!');
-    } catch (err: any) {
+    } catch (err:any) {
       showToast(err.message, 'error');
     } finally {
       setSaving(false);
@@ -97,10 +126,15 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
     if (!isAdmin || !newEvent.date) return showToast('Data é obrigatória', 'error');
     setSaving(true);
     try {
-      const { data, error } = await supabase.from('mission_events').insert([{ mission_date: newEvent.date, title: newEvent.title, created_by: profile?.id }]).select();
-      if (error) throw error;
+      const tempId = `tmp-${Date.now()}`;
+      const res = await safeWrite({ op:'insert', table:'mission_events', payload:[{ mission_date: newEvent.date, title: newEvent.title, created_by: profile?.id }], dedupeKey: dedupeKeyFor('mission_events',[tempId]) });
+      if (res.queued) {
+        setQueuedEvents(prev=>new Set(prev).add(tempId));
+        showToast('Evento enfileirado (offline)', 'info');
+      }
       showToast('Data adicionada!');
-      if (data) setEvents(prev => [...prev, data[0]].sort((a, b) => a.mission_date.localeCompare(b.mission_date)));
+      // refresh list (will pick up later when flushed)
+      setEvents(prev => [...prev, { id: tempId, mission_date: newEvent.date, title: newEvent.title } as any].sort((a,b)=>a.mission_date.localeCompare(b.mission_date)));
       setNewEvent({ date: '', title: 'Missão' });
     } catch (err: any) {
       showToast(err.message, 'error');
@@ -112,8 +146,7 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
   const confirmDeleteEvent = async () => {
     if (!idToDelete) return;
     try {
-      const { error } = await supabase.from('mission_events').delete().eq('id', idToDelete);
-      if (error) throw error;
+      await safeWrite({ op:'delete', table:'mission_events', filters:[{op:'eq',column:'id',value:idToDelete}], dedupeKey: dedupeKeyFor('mission_events',[idToDelete]) });
       setEvents(prev => prev.filter(e => e.id !== idToDelete));
       showToast('Evento removido');
     } catch (err: any) {

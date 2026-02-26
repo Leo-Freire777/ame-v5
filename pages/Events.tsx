@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { AppEvent } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const { profile, loadingProfile } = useAuth();
@@ -22,6 +23,13 @@ export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
     photos_url: ''
   });
 
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [savingEvents, setSavingEvents] = useState<Set<string>>(new Set());
+  const [queuedEvents, setQueuedEvents] = useState<Set<string>>(new Set());
+  const latestEvents = useRef<Record<string, AppEvent>>({});
+
+  useEffect(() => { latestEvents.current = events.reduce((a,e)=>{ if(e.id) a[e.id]=e; return a; }, {} as Record<string,AppEvent>); }, [events]);
+
   const fetchEvents = async () => {
     setLoading(true);
     try {
@@ -32,8 +40,16 @@ export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
       
       if (error) throw error;
       setEvents(data || []);
+      localStorage.setItem('events_cache', JSON.stringify(data || []));
     } catch (err: any) {
       console.error("[Events] Fetch error:", err);
+      try {
+        const cached = localStorage.getItem('events_cache');
+        if (cached) {
+          setEvents(JSON.parse(cached));
+          showToast('Usando cache local (offline)', 'info');
+        }
+      } catch {}
       showToast('Erro ao carregar eventos', 'error');
     } finally {
       setLoading(false);
@@ -43,6 +59,14 @@ export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   useEffect(() => {
     fetchEvents();
   }, []);
+
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); showToast('Online — sincronizando...', 'info'); };
+    const onOffline = () => { setIsOnline(false); showToast('Sem conexão', 'warning'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, [showToast]);
 
   const handleOpenCreate = () => {
     setEditingEvent(null);
@@ -70,55 +94,43 @@ export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
     e.preventDefault();
     if (!formData.title.trim()) return showToast('Título é obrigatório', 'error');
 
+    const persist = async (args:any, idForQueue?:string) => {
+      setSavingEvents(prev=>new Set(prev).add(idForQueue||''));
+      try {
+        const res = await safeWrite(args);
+        if (res.queued && idForQueue) {
+          setQueuedEvents(prev=>new Set(prev).add(idForQueue));
+          showToast('Operação enfileirada (offline)', 'info');
+        }
+      } catch(e){ console.error('[Events] persist', e); showToast('Erro ao salvar', 'error'); }
+      finally { setSavingEvents(prev=>{ const n=new Set(prev); n.delete(idForQueue||''); return n; }); }
+    };
+
     try {
-      if (editingEvent) {
-        const { error } = await supabase
-          .from('events')
-          .update(formData)
-          .eq('id', editingEvent.id);
-        if (error) throw error;
+      if (editingEvent && editingEvent.id) {
+        const filters=[{op:'eq',column:'id',value:editingEvent.id}];
+        await persist({op:'update',table:'events',payload:formData,filters,dedupeKey:dedupeKeyFor('events',[editingEvent.id])}, editingEvent.id);
         showToast('Evento atualizado!');
       } else {
-        const { error } = await supabase
-          .from('events')
-          .insert([{ ...formData, created_by: profile?.id }]);
-        if (error) throw error;
+        const tempId=`tmp-${Date.now()}`;
+        await persist({op:'insert',table:'events',payload:[{...formData,created_by:profile?.id}],dedupeKey:dedupeKeyFor('events',[tempId])}, tempId);
         showToast('Evento criado!');
       }
       setIsModalOpen(false);
       fetchEvents();
-    } catch (err: any) {
-      showToast(err.message, 'error');
-    }
+    } catch(err:any){ showToast(err.message,'error'); }
   };
 
   const confirmDelete = async () => {
     if (!idToDelete) return;
     try {
-      // Modificado para usar .select('id') e validar se a linha foi realmente afetada (contornando falsos positivos de RLS)
-      const { data, error } = await supabase
-        .from('events')
-        .delete()
-        .eq('id', idToDelete)
-        .select('id');
-      
-      console.log('[EVENTS_DELETE]', { idToDelete, data, error });
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        showToast('Evento excluído');
-        fetchEvents();
-      } else {
-        // Caso o delete retorne vazio, provavelmente o usuário não tem permissão de DELETE na política RLS
-        showToast('Não foi possível apagar (RLS/bloqueio ou filtro).', 'error');
-      }
-    } catch (err: any) {
-      console.error("[Events] Delete error:", err);
+      await safeWrite({op:'delete',table:'events',filters:[{op:'eq',column:'id',value:idToDelete}],dedupeKey:dedupeKeyFor('events',[idToDelete])});
+      showToast('Evento excluído');
+      fetchEvents();
+    } catch(err:any){
+      console.error('[Events] delete',err);
       showToast(err.message || 'Erro ao excluir evento', 'error');
-    } finally {
-      setIdToDelete(null);
-    }
+    } finally { setIdToDelete(null); }
   };
 
   const formatDate = (dateStr: string) => {

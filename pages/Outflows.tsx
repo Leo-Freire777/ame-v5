@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Point, KitOutflow } from '../types';
 import { getMissionDay, getCutoff, formatMissionDay } from '../lib/missionDay';
 import { useAuth } from '../context/AuthContext';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const { profile, loadingProfile } = useAuth();
@@ -18,6 +19,15 @@ export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = (
   const [missionDay, setMissionDay] = useState('');
   const [idToDelete, setIdToDelete] = useState<string | null>(null);
 
+  // offline support
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [queuedOutflows, setQueuedOutflows] = useState<Set<string>>(new Set());
+  const latestEntries = useRef<Record<string, Partial<KitOutflow>>>({});
+
+  useEffect(() => {
+    latestEntries.current = entries;
+  }, [entries]);
+
   useEffect(() => {
     const init = async () => {
       setLoading(true);
@@ -27,6 +37,7 @@ export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = (
 
       const { data: pts } = await supabase.from('points').select('*').eq('active', true);
       setPoints(pts || []);
+      localStorage.setItem('outflows_points_cache', JSON.stringify(pts || []));
 
       const { data: outflows } = await supabase.from('kit_outflows').select('*').eq('mission_day', md);
       const entryMap: Record<string, Partial<KitOutflow>> = {};
@@ -34,6 +45,7 @@ export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = (
         entryMap[o.point_id] = o;
       });
       setEntries(entryMap);
+      localStorage.setItem(`outflows_entries_${md}`, JSON.stringify(entryMap));
       setLoading(false);
     };
     init();
@@ -59,6 +71,14 @@ export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = (
     if (activeTab === 'history') fetchHistory();
   }, [activeTab]);
 
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); showToast('Online — sincronizando...', 'info'); };
+    const onOffline = () => { setIsOnline(false); showToast('Sem conexão', 'warning'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, [showToast]);
+
   const handleUpdate = (pointId: string, field: 'food_kits' | 'clothing_kits', value: number) => {
     setEntries(prev => ({
       ...prev,
@@ -82,11 +102,14 @@ export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = (
         recorded_by: profile?.id,
       };
 
-      const { error } = await supabase
-        .from('kit_outflows')
-        .upsert(payload, { onConflict: 'mission_day,point_id' });
-
-      if (error) throw error;
+      const dedupe = dedupeKeyFor('kit_outflows', [missionDay, pointId]);
+      const res = await safeWrite({ op: 'upsert', table: 'kit_outflows', payload, options: { onConflict: 'mission_day,point_id' }, dedupeKey: dedupe });
+      if (res.queued) {
+        setQueuedOutflows(prev => new Set(prev).add(pointId));
+        showToast('Operação enfileirada (offline)', 'info');
+      } else if (res.error) {
+        throw res.error;
+      }
       showToast('Saída salva com sucesso!');
     } catch (err: any) {
       showToast(err.message || 'Erro ao salvar', 'error');
@@ -98,11 +121,11 @@ export const Outflows: React.FC<{ showToast: (m: string, t?: any) => void }> = (
   const confirmDelete = async () => {
     if (!idToDelete) return;
     try {
-      const { error } = await supabase.from('kit_outflows').delete().eq('id', idToDelete);
-      if (error) throw error;
+      await safeWrite({ op: 'delete', table: 'kit_outflows', filters: [{ op: 'eq', column: 'id', value: idToDelete }], dedupeKey: dedupeKeyFor('kit_outflows', [idToDelete]) });
       showToast('Registro excluído');
       fetchHistory();
     } catch (err: any) {
+      console.error('[Outflows] delete', err);
       showToast(err.message, 'error');
     } finally {
       setIdToDelete(null);

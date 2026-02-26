@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { ClinicRecord, Person } from '../types';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useAuth } from '../context/AuthContext';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const Clinic: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const { profile } = useAuth();
@@ -15,6 +16,16 @@ export const Clinic: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const [idToDelete, setIdToDelete] = useState<string | null>(null);
   const [formData, setFormData] = useState({ person_id: '', observation: '' });
   const [restricted, setRestricted] = useState(false);
+
+  // offline state
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [savingRecords, setSavingRecords] = useState<Set<string>>(new Set());
+  const [queuedRecords, setQueuedRecords] = useState<Set<string>>(new Set());
+  const latestRecords = useRef<Record<string, ClinicRecord>>({});
+
+  useEffect(() => {
+    latestRecords.current = records.reduce((acc, r) => { if (r.id) acc[r.id] = r; return acc; }, {} as Record<string, ClinicRecord>);
+  }, [records]);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -29,18 +40,53 @@ export const Clinic: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
         throw rErr;
       }
       setRecords(recs || []);
+      localStorage.setItem('clinic_cache', JSON.stringify({ records: recs || [] }));
       
       const { data: pps } = await supabase.from('people').select('id, name');
       setPeople(pps || []);
+      localStorage.setItem('clinic_people_cache', JSON.stringify(pps || []));
     } catch (e: any) {
       if (e.code !== '42501') {
         console.error("Erro ao carregar clínica:", e.code, e.message);
       }
+      // fallback para cache local
+      try {
+        const cached = localStorage.getItem('clinic_cache');
+        if (cached) {
+          const { records: cr } = JSON.parse(cached);
+          console.warn('[Clinic] usando cache local');
+          setRecords(cr);
+          showToast('Usando dados em cache (offline)', 'info');
+        }
+        const cachedPeople = localStorage.getItem('clinic_people_cache');
+        if (cachedPeople) {
+          setPeople(JSON.parse(cachedPeople));
+        }
+      } catch {}
     }
     setLoading(false);
   };
 
   useEffect(() => { fetchAll(); }, []);
+
+  // online / offline listener
+  useEffect(() => {
+    const onOnline = () => {
+      setIsOnline(true);
+      showToast('Online — sincronizando...', 'info');
+      // outbox flush is global via useOutboxSync
+    };
+    const onOffline = () => {
+      setIsOnline(false);
+      showToast('Sem conexão', 'warning');
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [showToast]);
 
   const handleOpenCreate = () => {
     setEditingRecord(null);
@@ -56,15 +102,37 @@ export const Clinic: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const payloadBase = {
+      person_id: formData.person_id,
+      observation: formData.observation,
+      created_by: profile?.id,
+    };
+
+    const persist = async (opArgs: any, idForQueue?: string) => {
+      setSavingRecords(prev => new Set(prev).add(idForQueue || '')); // '' for new
+      try {
+        const res = await safeWrite(opArgs);
+        if (res.queued) {
+          if (idForQueue) setQueuedRecords(prev => new Set(prev).add(idForQueue));
+          showToast('Operação enfileirada (offline)', 'info');
+        }
+      } catch (e) {
+        console.error('[Clinic] persist error', e);
+        showToast('Falha ao salvar', 'error');
+      } finally {
+        setSavingRecords(prev => {
+          const next = new Set(prev);
+          next.delete(idForQueue || '');
+          return next;
+        });
+      }
+    };
+
     try {
-      if (editingRecord) {
-        const { error } = await supabase
-          .from('clinic_records')
-          .update(formData)
-          .eq('id', editingRecord.id);
-        
-        if (error) throw error;
-        
+      if (editingRecord && editingRecord.id) {
+        const filters = [{ op: 'eq', column: 'id', value: editingRecord.id }];
+        await persist({ op: 'update', table: 'clinic_records', payload: formData, filters, dedupeKey: dedupeKeyFor('clinic_records', [editingRecord.id]) }, editingRecord.id);
         setRecords(prev => prev.map(r => r.id === editingRecord.id ? ({ 
           ...r, 
           ...formData,
@@ -72,14 +140,10 @@ export const Clinic: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
         } as ClinicRecord) : r));
         showToast('Atendimento atualizado!');
       } else {
-        const { data, error } = await supabase
-          .from('clinic_records')
-          .insert([{ ...formData, created_by: profile?.id }])
-          .select('*, person:people(name)');
-        
-        if (error) throw error;
-        
-        if (data) setRecords(prev => [data[0], ...prev]);
+        // new record: generate temporary id to track queue
+        const tempId = `tmp-${Date.now()}`;
+        await persist({ op: 'insert', table: 'clinic_records', payload: [{ ...payloadBase }] , dedupeKey: dedupeKeyFor('clinic_records', [tempId]) }, tempId);
+        setRecords(prev => [{ id: tempId, ...payloadBase } as any, ...prev]);
         showToast('Registro clínico salvo!');
       }
       setIsModalOpen(false);
@@ -91,16 +155,11 @@ export const Clinic: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const confirmDelete = async () => {
     if (!idToDelete) return;
     try {
-      const { error } = await supabase
-        .from('clinic_records')
-        .delete()
-        .eq('id', idToDelete);
-      
-      if (error) throw error;
-      
+      await safeWrite({ op: 'delete', table: 'clinic_records', filters: [{ op: 'eq', column: 'id', value: idToDelete }], dedupeKey: dedupeKeyFor('clinic_records', [idToDelete]) });
       setRecords(prev => prev.filter(r => r.id !== idToDelete));
       showToast('Prontuário removido');
     } catch (err: any) {
+      console.error('[Clinic] delete error', err);
       showToast(err.message, 'error');
     } finally {
       setIdToDelete(null);

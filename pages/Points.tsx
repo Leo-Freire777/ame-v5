@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Point } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const Points: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const { profile, loadingProfile } = useAuth();
@@ -16,22 +17,46 @@ export const Points: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const [formData, setFormData] = useState({ name: '', notes: '', active: true });
   const [idToDelete, setIdToDelete] = useState<string | null>(null);
 
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [savingPoints, setSavingPoints] = useState<Set<string>>(new Set());
+  const [queuedPoints, setQueuedPoints] = useState<Set<string>>(new Set());
+  const latestPoints = useRef<Record<string, Point>>({});
+
+  useEffect(() => { latestPoints.current = points.reduce((a,p)=>{ if(p.id) a[p.id]=p; return a; }, {} as Record<string,Point>); }, [points]);
+
   const fetchPoints = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('points')
-      .select('*')
-      .order('name', { ascending: true });
-    
-    if (error) {
-      showToast('Erro ao carregar pontos', 'error');
-    } else {
+    try {
+      const { data, error } = await supabase
+        .from('points')
+        .select('*')
+        .order('name', { ascending: true });
+      
+      if (error) throw error;
       setPoints(data || []);
+      localStorage.setItem('points_cache', JSON.stringify(data || []));
+    } catch (err: any) {
+      console.error('[Points] fetch', err);
+      try {
+        const cached = localStorage.getItem('points_cache');
+        if (cached) {
+          setPoints(JSON.parse(cached));
+          showToast('Usando cache local (offline)', 'info');
+        }
+      } catch {}
     }
     setLoading(false);
   };
 
   useEffect(() => { fetchPoints(); }, []);
+
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); showToast('Online — sincronizando...', 'info'); };
+    const onOffline = () => { setIsOnline(false); showToast('Sem conexão', 'warning'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, [showToast]);
 
   const handleOpenCreate = () => {
     setEditingPoint(null);
@@ -49,30 +74,36 @@ export const Points: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
     e.preventDefault();
     if (!formData.name.trim()) return showToast('Nome é obrigatório', 'error');
 
+    const persist = async (args:any, idForQueue?:string) => {
+      setSavingPoints(prev => new Set(prev).add(idForQueue||''));
+      try {
+        const res = await safeWrite(args);
+        if (res.queued && idForQueue) {
+          setQueuedPoints(prev => new Set(prev).add(idForQueue));
+          showToast('Operação enfileirada (offline)', 'info');
+        }
+      } catch (e) {
+        console.error('[Points] persist', e);
+        showToast('Erro ao salvar', 'error');
+      } finally {
+        setSavingPoints(prev => { const n=new Set(prev); n.delete(idForQueue||''); return n; });
+      }
+    };
+
     try {
-      if (editingPoint) {
-        const { error } = await supabase
-          .from('points')
-          .update(formData)
-          .eq('id', editingPoint.id);
-        
-        if (error) throw error;
-        
+      if (editingPoint && editingPoint.id) {
+        const filters = [{ op:'eq', column:'id', value: editingPoint.id }];
+        await persist({ op:'update', table:'points', payload: formData, filters, dedupeKey: dedupeKeyFor('points',[editingPoint.id]) }, editingPoint.id);
         setPoints(prev => prev.map(p => p.id === editingPoint.id ? { ...p, ...formData } : p));
         showToast('Ponto atualizado!');
       } else {
-        const { data, error } = await supabase
-          .from('points')
-          .insert([formData])
-          .select();
-        
-        if (error) throw error;
-        
-        if (data) setPoints(prev => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name)));
+        const tempId = `tmp-${Date.now()}`;
+        await persist({ op:'insert', table:'points', payload: [formData], dedupeKey: dedupeKeyFor('points',[tempId]) }, tempId);
+        setPoints(prev => [...prev, { id: tempId, ...formData } as any].sort((a,b)=>a.name.localeCompare(b.name)));
         showToast('Ponto criado!');
       }
       setIsModalOpen(false);
-    } catch (err: any) {
+    } catch (err:any) {
       showToast(err.message || 'Erro ao salvar', 'error');
     }
   };
@@ -80,16 +111,12 @@ export const Points: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const toggleActive = async (point: Point) => {
     const newStatus = !point.active;
     try {
-      const { error } = await supabase
-        .from('points')
-        .update({ active: newStatus })
-        .eq('id', point.id);
-      
-      if (error) throw error;
-      
+      const filters = [{ op:'eq', column:'id', value: point.id }];
+      await safeWrite({ op:'update', table:'points', payload: { active: newStatus }, filters, dedupeKey: dedupeKeyFor('points',[point.id]) });
       setPoints(prev => prev.map(p => p.id === point.id ? { ...p, active: newStatus } : p));
       showToast(newStatus ? 'Ponto ativado' : 'Ponto desativado');
     } catch (err: any) {
+      console.error('[Points] toggleActive', err);
       showToast(err.message, 'error');
     }
   };
@@ -97,16 +124,11 @@ export const Points: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const confirmDelete = async () => {
     if (!idToDelete) return;
     try {
-      const { error } = await supabase
-        .from('points')
-        .delete()
-        .eq('id', idToDelete);
-      
-      if (error) throw error;
-      
+      await safeWrite({ op:'delete', table:'points', filters:[{op:'eq',column:'id',value:idToDelete}], dedupeKey: dedupeKeyFor('points',[idToDelete]) });
       setPoints(prev => prev.filter(p => p.id !== idToDelete));
       showToast('Ponto excluído');
     } catch (err: any) {
+      console.error('[Points] delete', err);
       showToast(err.message, 'error');
     } finally {
       setIdToDelete(null);

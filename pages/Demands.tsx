@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Demand, Person, Point } from '../types';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useAuth } from '../context/AuthContext';
+import { safeWrite, dedupeKeyFor } from '../src/offline/safeWrite';
 
 export const Demands: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ showToast }) => {
   const { profile } = useAuth();
@@ -22,6 +23,16 @@ export const Demands: React.FC<{ showToast: (m: string, t?: any) => void }> = ({
     status: 'pendente' as any
   });
 
+  // offline support
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [savingDemands, setSavingDemands] = useState<Set<string>>(new Set());
+  const [queuedDemands, setQueuedDemands] = useState<Set<string>>(new Set());
+  const latestDemands = useRef<Record<string, Demand>>({});
+
+  useEffect(() => {
+    latestDemands.current = demands.reduce((acc, d) => { if (d.id) acc[d.id] = d; return acc; }, {} as Record<string, Demand>);
+  }, [demands]);
+
   const fetchAll = async () => {
     setLoading(true);
     try {
@@ -31,15 +42,35 @@ export const Demands: React.FC<{ showToast: (m: string, t?: any) => void }> = ({
         supabase.from('points').select('id, name')
       ]);
       setDemands(dRes.data || []);
+      localStorage.setItem('demands_cache', JSON.stringify(dRes.data || []));
       setPeople(pRes.data || []);
+      localStorage.setItem('demands_people_cache', JSON.stringify(pRes.data || []));
       setPoints(ptRes.data || []);
+      localStorage.setItem('demands_points_cache', JSON.stringify(ptRes.data || []));
     } catch (err: any) {
       console.error("Erro ao carregar demandas:", err.code, err.message);
+      try {
+        const cached = localStorage.getItem('demands_cache');
+        if (cached) setDemands(JSON.parse(cached));
+        const cp = localStorage.getItem('demands_people_cache');
+        if (cp) setPeople(JSON.parse(cp));
+        const cpt = localStorage.getItem('demands_points_cache');
+        if (cpt) setPoints(JSON.parse(cpt));
+        showToast('Usando dados em cache (offline)', 'info');
+      } catch {}
     }
     setLoading(false);
   };
 
   useEffect(() => { fetchAll(); }, []);
+
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); showToast('Online — sincronizando...', 'info'); };
+    const onOffline = () => { setIsOnline(false); showToast('Sem conexão', 'warning'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, [showToast]);
 
   const handleOpenCreate = () => {
     setEditingDemand(null);
@@ -67,31 +98,40 @@ export const Demands: React.FC<{ showToast: (m: string, t?: any) => void }> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const payload = { ...formData, created_by: profile?.id };
+
+    const persist = async (args: any, idForQueue?: string) => {
+      setSavingDemands(prev => new Set(prev).add(idForQueue || ''));
+      try {
+        const res = await safeWrite(args);
+        if (res.queued && idForQueue) {
+          setQueuedDemands(prev => new Set(prev).add(idForQueue));
+          showToast('Operação enfileirada (offline)', 'info');
+        }
+      } catch (e) {
+        console.error('[Demands] persist', e);
+        showToast('Falha ao salvar', 'error');
+      } finally {
+        setSavingDemands(prev => { const n = new Set(prev); n.delete(idForQueue || ''); return n; });
+      }
+    };
+
     try {
-      if (editingDemand) {
-        const { error } = await supabase
-          .from('demands')
-          .update(formData)
-          .eq('id', editingDemand.id);
-        
-        if (error) throw error;
-        
-        setDemands(prev => prev.map(d => d.id === editingDemand.id ? ({ 
-          ...d, 
+      if (editingDemand && editingDemand.id) {
+        const filters = [{ op: 'eq', column: 'id', value: editingDemand.id }];
+        await persist({ op: 'update', table: 'demands', payload, filters, dedupeKey: dedupeKeyFor('demands', [editingDemand.id]) }, editingDemand.id);
+        setDemands(prev => prev.map(d => d.id === editingDemand.id ? ({
+          ...d,
           ...formData,
           person: people.find(p => p.id === formData.person_id) || d.person,
           point: points.find(p => p.id === formData.point_id) || d.point
         } as Demand) : d));
         showToast('Demanda atualizada!');
       } else {
-        const { data, error } = await supabase
-          .from('demands')
-          .insert([{ ...formData, created_by: profile?.id }])
-          .select('*, person:people(name), point:points(name)');
-        
-        if (error) throw error;
-        
-        if (data) setDemands(prev => [data[0], ...prev]);
+        const tempId = `tmp-${Date.now()}`;
+        await persist({ op: 'insert', table: 'demands', payload: [payload], dedupeKey: dedupeKeyFor('demands', [tempId]) }, tempId);
+        setDemands(prev => [{ id: tempId, ...payload } as any, ...prev]);
         showToast('Demanda registrada!');
       }
       setIsModalOpen(false);
@@ -103,16 +143,11 @@ export const Demands: React.FC<{ showToast: (m: string, t?: any) => void }> = ({
   const confirmDelete = async () => {
     if (!idToDelete) return;
     try {
-      const { error } = await supabase
-        .from('demands')
-        .delete()
-        .eq('id', idToDelete);
-      
-      if (error) throw error;
-      
+      await safeWrite({ op: 'delete', table: 'demands', filters: [{ op: 'eq', column: 'id', value: idToDelete }], dedupeKey: dedupeKeyFor('demands', [idToDelete]) });
       setDemands(prev => prev.filter(d => d.id !== idToDelete));
       showToast('Demanda excluída');
     } catch (err: any) {
+      console.error('[Demands] delete', err);
       showToast(err.message, 'error');
     } finally {
       setIdToDelete(null);
