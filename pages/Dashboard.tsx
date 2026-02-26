@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import { getMissionDay, getCutoff, formatMissionDay } from '../lib/missionDay';
 import { DailyVerse } from '../types';
 
 export const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
+
   const [missionDay, setMissionDay] = useState('');
   const [cutoff, setCutoff] = useState('05:00');
   const [verse, setVerse] = useState<DailyVerse | null>(null);
@@ -156,7 +159,7 @@ export const Dashboard: React.FC = () => {
         <h1 className="text-3xl font-black">Missão Hoje: <span className="text-primary">{formatMissionDay(missionDay)}</span></h1>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          <div className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group">
+          <div onClick={() => navigate("/censo")} className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group cursor-pointer hover:scale-[1.02] transition-transform duration-200">
             <div className="absolute top-0 right-0 p-4 text-white opacity-5 transition-transform group-hover:scale-125">
               <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
             </div>
@@ -165,7 +168,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[9px] text-muted mt-5 font-bold uppercase tracking-tighter">MÉTRICA DO CENSO</p>
           </div>
 
-          <div className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group">
+          <div onClick={() => navigate("/outflows") } className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group cursor-pointer hover:scale-[1.02] transition-transform duration-200">
              <div className="absolute top-0 right-0 p-4 text-white opacity-5 transition-transform group-hover:scale-125">
               <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" /></svg>
             </div>
@@ -174,7 +177,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[9px] text-muted mt-5 font-bold uppercase">SAÍDA DIÁRIA</p>
           </div>
 
-          <div className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group">
+          <div onClick={() => navigate("/outflows") } className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group cursor-pointer hover:scale-[1.02] transition-transform duration-200">
              <div className="absolute top-0 right-0 p-4 text-white opacity-5 transition-transform group-hover:scale-125">
               <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7h18M3 11h18M3 15h18M3 19h18" /></svg>
             </div>
@@ -183,7 +186,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[9px] text-muted mt-5 font-bold uppercase">SAÍDA DIÁRIA</p>
           </div>
 
-          <div className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group">
+          <div onClick={() => navigate("/demands")} className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group cursor-pointer hover:scale-[1.02] transition-transform duration-200">
             <div className="absolute top-0 right-0 p-4 text-white opacity-5 transition-transform group-hover:scale-125">
               <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
             </div>
@@ -192,7 +195,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[9px] text-muted mt-5 font-bold uppercase">AGUARDANDO AÇÃO</p>
           </div>
 
-          <div className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group">
+          <div onClick={() => navigate("/clinic")} className="bg-surface border border-border p-6 rounded-2xl relative overflow-hidden group cursor-pointer hover:scale-[1.02] transition-transform duration-200">
             <div className="absolute top-0 right-0 p-4 text-white opacity-5 transition-transform group-hover:scale-125">
               <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
             </div>

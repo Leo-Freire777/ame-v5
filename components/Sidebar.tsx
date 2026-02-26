@@ -1,19 +1,22 @@
 "use client";
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { SidebarLogo} from './BrandLogo';
 
-interface SidebarProps {
+type SidebarProps = {
   activeTab: string;
-  setActiveTab: (tab: string) => void;
+  setActiveTab: (tab: string) => void; // still used for styling
   onSignOut: () => void;
   isOpen: boolean;
-}
+  onClose: () => void;
+};
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onSignOut, isOpen }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onSignOut, isOpen, onClose }) => {
   const { profile, signOut, isLoggingOut } = useAuth();
   const [internalLoggingOut, setInternalLoggingOut] = useState(false);
-  
+  const navigate = useNavigate();
+
   const handleLogout = async () => {
     console.log("logout clicked");
     setInternalLoggingOut(true);
@@ -56,22 +59,40 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onSig
       </div>
 
       <nav className="flex-1 overflow-y-auto p-4 space-y-1">
-        {menuItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setActiveTab(item.id)}
-            disabled={isLoggingOut || internalLoggingOut}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              activeTab === item.id 
-                ? 'bg-primary text-white shadow-lg shadow-primary/20 font-bold' 
-                : 'text-muted hover:bg-white/5 hover:text-white'
-            }`}
-          >
-            <span className="flex-shrink-0">{item.icon}</span>
-            <span className="text-sm">{item.label}</span>
-          </button>
-        ))}
+        {menuItems.map((item) => {
+          // derive path from id
+          const pathMap: Record<string,string> = {
+            dashboard: '/',
+            points: '/points',
+            outflows: '/outflows',
+            census: '/censo',
+            people: '/people',
+            volunteers: '/volunteers',
+            demands: '/demands',
+            clinic: '/clinic',
+            reports: '/reports',
+            settings: '/settings',
+            links: '/links',
+            events: '/events',
+          };
+          const dest = pathMap[item.id] || '/';
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => { navigate(dest); setActiveTab(item.id); onClose(); }}
+              disabled={isLoggingOut || internalLoggingOut}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                activeTab === item.id 
+                  ? 'bg-primary text-white shadow-lg shadow-primary/20 font-bold' 
+                  : 'text-muted hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <span className="flex-shrink-0">{item.icon}</span>
+              <span className="text-sm">{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
 
       <div className="p-4 border-t border-border">

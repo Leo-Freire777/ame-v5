@@ -1,6 +1,8 @@
 import React, { Component, useState, ErrorInfo, ReactNode, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import OfflinePinSetup from './components/OfflinePinSetup';
 import { OfflineUnlock } from './components/OfflineUnlock';
 import { hasOfflinePin } from './src/offline/offlinePin';
 import { supabase } from './lib/supabaseClient';
@@ -66,10 +68,12 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 const AppContent: React.FC = () => { 
   useOutboxSync();  
   const { session, profile, loading, signOut, isLoggingOut } = useAuth();
+  const location = useLocation();
   const [view, setView] = useState('login'); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [requirePinSetup, setRequirePinSetup] = useState(false);
   
   // Estados do Gate Offline
   const [offlineGate, setOfflineGate] = useState<"checking"|"need-online-first"|"need-pin"|"ok">("checking");
@@ -129,6 +133,35 @@ const AppContent: React.FC = () => {
       window.removeEventListener("online", onOnline);
     };
   }, []);
+
+  // Verificar se precisa criar PIN offline após login online
+  useEffect(() => {
+    if (session && navigator.onLine && !hasOfflinePin()) {
+      setRequirePinSetup(true);
+    } else {
+      setRequirePinSetup(false);
+    }
+  }, [session]);
+
+  // sync URL -> tabs for sidebar highlighting
+  useEffect(() => {
+    const p = location.pathname;
+    const map: Record<string,string> = {
+      '/': 'dashboard',
+      '/censo': 'census',
+      '/outflows': 'outflows',
+      '/points': 'points',
+      '/people': 'people',
+      '/volunteers': 'volunteers',
+      '/demands': 'demands',
+      '/clinic': 'clinic',
+      '/reports': 'reports',
+      '/settings': 'settings',
+      '/links': 'links',
+      '/events': 'events',
+    };
+    if (map[p]) setActiveTab(map[p]);
+  }, [location.pathname]);
 
   const showToast = useCallback((message: string, type: ToastType = 'success') => {
     setToast({ message, type });
@@ -204,6 +237,15 @@ const AppContent: React.FC = () => {
   // Não retornamos null ou spinners que desmontam a árvore React principal.
   // Em vez disso, renderizamos o shell base e sobrepomos o estado de loading.
 
+  // Bloqueia acesso até criar PIN offline (se necessário)
+  if (requirePinSetup) {
+    return (
+      <OfflinePinSetup
+        onDone={() => setRequirePinSetup(false)}
+      />
+    );
+  }
+
   // Caso: Autenticação Inicial ou Logout
   if (!session || isLoggingOut) {
     if (loading && !isLoggingOut) {
@@ -234,23 +276,6 @@ const AppContent: React.FC = () => {
     );
   }
 
-  const renderActiveTab = () => {
-    switch (activeTab) {
-      case 'dashboard': return <Dashboard />;
-      case 'points': return <Points showToast={showToast} />;
-      case 'outflows': return <Outflows showToast={showToast} />;
-      case 'census': return <Census showToast={showToast} />;
-      case 'people': return <People showToast={showToast} />;
-      case 'volunteers': return <Volunteers showToast={showToast} />;
-      case 'demands': return <Demands showToast={showToast} />;
-      case 'clinic': return <Clinic showToast={showToast} />;
-      case 'reports': return <Reports />;
-      case 'settings': return <Settings showToast={showToast} />;
-      case 'links': return <MissionLinks showToast={showToast} />;
-      case 'events': return <Events showToast={showToast} />;
-      default: return <Dashboard />;
-    }
-  };
 
   return (
     <div className="flex min-h-screen bg-background text-white font-sans animate-in fade-in duration-700">
@@ -268,6 +293,7 @@ const AppContent: React.FC = () => {
         setActiveTab={(tab) => { setActiveTab(tab); setIsSidebarOpen(false); }} 
         onSignOut={handleLogout} 
         isOpen={isSidebarOpen} 
+        onClose={() => setIsSidebarOpen(false)}
       />
 
       <main className="flex-1 min-w-0 md:ml-64 p-4 md:p-8 pb-16 relative">
@@ -279,9 +305,23 @@ const AppContent: React.FC = () => {
           <div className="w-10"></div>
         </header>
 
-        {/* Conteúdo dinâmico com transição suave */}
-        <div key={activeTab} className="animate-in fade-in slide-in-from-bottom-1 duration-500">
-          {renderActiveTab()}
+        {/* Conteúdo via rotas */}
+        <div className="animate-in fade-in slide-in-from-bottom-1 duration-500">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/censo" element={<Census showToast={showToast} />} />
+            <Route path="/outflows" element={<Outflows showToast={showToast} />} />
+            <Route path="/points" element={<Points showToast={showToast} />} />
+            <Route path="/people" element={<People showToast={showToast} />} />
+            <Route path="/volunteers" element={<Volunteers showToast={showToast} />} />
+            <Route path="/demands" element={<Demands showToast={showToast} />} />
+            <Route path="/clinic" element={<Clinic showToast={showToast} />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/settings" element={<Settings showToast={showToast} />} />
+            <Route path="/links" element={<MissionLinks showToast={showToast} />} />
+            <Route path="/events" element={<Events showToast={showToast} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         </div>
       </main>
 
@@ -295,7 +335,9 @@ const container = document.getElementById('root');
 if (container) {
   createRoot(container).render(
     <ErrorBoundary>
-      <AuthProvider><AppContent /></AuthProvider>
+      <BrowserRouter>
+        <AuthProvider><AppContent /></AuthProvider>
+      </BrowserRouter>
     </ErrorBoundary>
   );
 }
