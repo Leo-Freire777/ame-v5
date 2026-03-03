@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
-import { getMissionDay, getCutoff, formatMissionDay } from '../lib/missionDay';
+import { getMissionDay, getCutoff, formatMissionDay, toLocalISO } from '../lib/missionDay';
 import { DailyVerse } from '../types';
 
 export const Dashboard: React.FC = () => {
@@ -31,7 +31,7 @@ export const Dashboard: React.FC = () => {
         const md = getMissionDay(new Date(), c);
         setMissionDay(md);
         
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = toLocalISO(new Date());
 
         const [
           verseRes,

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { toLocalISO } from '../lib/missionDay';
 import { AppEvent } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Modal } from '../components/Modal';
@@ -19,7 +20,7 @@ export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    event_date: new Date().toISOString().split('T')[0],
+    event_date: toLocalISO(new Date()),
     photos_url: ''
   });
 
@@ -73,7 +74,7 @@ export const Events: React.FC<{ showToast: (m: string, t?: any) => void }> = ({ 
     setFormData({
       title: '',
       description: '',
-      event_date: new Date().toISOString().split('T')[0],
+      event_date: toLocalISO(new Date()),
       photos_url: ''
     });
     setIsModalOpen(true);

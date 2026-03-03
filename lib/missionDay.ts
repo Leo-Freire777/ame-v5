@@ -50,12 +50,17 @@ export function getMissionDay(now: Date, cutoffStr: string): string {
   const currentM = now.getMinutes();
   const missionDate = new Date(now);
   
+  // se ainda estamos antes do horário de corte, consideramos que a missão
+  // pertence ao dia anterior, mas mantemos a data no fuso local ao gerar
+  // a string. Não convertemos para UTC porque isso desloca dia em fusos
+  // negativos (BR UTC‑3 etc).
   if (currentH < (cutoffH || 0) || (currentH === cutoffH && currentM < (cutoffM || 0))) {
     missionDate.setDate(missionDate.getDate() - 1);
   }
   
-  return missionDate.toISOString().split('T')[0];
+  return toLocalISO(missionDate);
 }
+
 
 export function formatMissionDay(dateStr: string): string {
   if (!dateStr) return '—';
@@ -67,4 +72,16 @@ export function formatMissionDay(dateStr: string): string {
   } catch {
     return dateStr;
   }
+}
+
+/**
+ * Formata uma data para a string ISO local (yyyy-MM-dd). Usa os métodos
+ * `getFullYear`/`getMonth`/`getDate` para evitar conversão para UTC que
+ * acontece com toISOString().
+ */
+export function toLocalISO(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }

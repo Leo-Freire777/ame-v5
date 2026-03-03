@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { toLocalISO } from '../lib/missionDay';
 import { useAuth } from '../context/AuthContext';
 import { clearOfflinePin, hasOfflinePin } from '../src/offline/offlinePin';
 import { MissionEvent } from '../types';
@@ -72,7 +73,7 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
       const [cRes, vRes, eRes] = await Promise.all([
         supabase.from('app_settings').select('*').eq('key', 'mission_day_cutoff').maybeSingle(),
         supabase.from('app_settings').select('*').eq('key', 'daily_verse').maybeSingle(),
-        supabase.from('mission_events').select('*').gte('mission_date', new Date().toISOString().split('T')[0]).order('mission_date', { ascending: true })
+        supabase.from('mission_events').select('*').gte('mission_date', toLocalISO(new Date())).order('mission_date', { ascending: true })
       ]);
 
       if (cRes.data) setCutoff(cRes.data.value.cutoff);
@@ -197,7 +198,7 @@ export const Settings: React.FC<{ showToast: (m: string, t?: any) => void }> = (
             <div className="space-y-4">
               <textarea placeholder="Texto do versículo..." className="w-full bg-background border border-border p-3 rounded-xl min-h-[80px] outline-none font-medium leading-relaxed" value={verse.text} onChange={(e) => setVerse({...verse, text: e.target.value})} />
               <input placeholder="Referência (Ex: João 3:16)" className="w-full bg-background border border-border p-3 rounded-xl outline-none font-bold tracking-widest" value={verse.reference} onChange={(e) => setVerse({...verse, reference: e.target.value})} />
-              {!loadingProfile && isAdmin && <button disabled={saving} onClick={() => saveSettings('daily_verse', { ...verse, day: new Date().toISOString().split('T')[0] })} className="w-full bg-primary py-4 rounded-xl font-bold disabled:opacity-50 shadow-lg shadow-primary/20 uppercase tracking-widest text-sm">Atualizar Versículo</button>}
+              {!loadingProfile && isAdmin && <button disabled={saving} onClick={() => saveSettings('daily_verse', { ...verse, day: toLocalISO(new Date()) })} className="w-full bg-primary py-4 rounded-xl font-bold disabled:opacity-50 shadow-lg shadow-primary/20 uppercase tracking-widest text-sm">Atualizar Versículo</button>}
             </div>
           </div>
         </div>

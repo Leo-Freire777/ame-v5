@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
-import { getMissionDay, getCutoff, formatMissionDay } from '../lib/missionDay';
+import { getMissionDay, getCutoff, formatMissionDay, toLocalISO } from '../lib/missionDay';
 
 // helper para calcular médias e pico por migrações de missão; não usa datas corridas
 function average(arr: number[]) {
@@ -36,7 +36,8 @@ export const Reports: React.FC = () => {
       // busca entradas dos últimos 6 meses e agrega por mission_day
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-      const sixMonthsAgoISO = sixMonthsAgo.toISOString().slice(0, 10);
+      // usamos iso local para evitar deslocamento de dia em fusos negativos
+      const sixMonthsAgoISO = toLocalISO(sixMonthsAgo);
 
       // ===== CENSUS DATA =====
       const { data: raw, error: rawErr } = await supabase
