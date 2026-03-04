@@ -46,19 +46,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onSig
       transition-transform duration-300 ease-in-out
       ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
     `}>
-      <div className="p-6 border-b border-border flex flex-col items-center">
-        <SidebarLogo className="mb-0" />
+      <div className="p-4 border-b border-border flex flex-col items-center">
+        <SidebarLogo className="mb-100" />
         
         <div className="mt-1 w-full text-center">
           
           <p className="text-xl font-semibold truncate text-white uppercase">Olá, {profile?.full_name?.split(' ')[0]}</p>
-          <span className="inline-block px-2 py-0.5 bg-primary/10 text-primary text-[10px] rounded uppercase font-bold mt-1 tracking-tighter">
+          <span className="inline-block px-1 py-0.5 bg-primary/10 text-primary text-[10px] rounded uppercase font-bold mt-0 tracking-tighter">
             Nível: {profile?.role || 'voluntario'}
           </span>
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+      <nav className="flex-1 overflow-y-auto p-1 space-y-0">
         {menuItems.map((item) => {
           // derive path from id
           const pathMap: Record<string,string> = {
